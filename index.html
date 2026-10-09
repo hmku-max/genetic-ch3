@@ -273,6 +273,24 @@
     padding:10px 12px; border-radius:6px; margin:10px 0; font-size:13px; line-height:1.5;
   }
 
+  /* Timer & result (scoring mode) */
+  .hud-bar{grid-template-columns:1fr 1.2fr 1fr 1.1fr 2fr;}
+  @media (max-width:700px){ .hud-bar{grid-template-columns:1fr 1fr;} }
+  .hud-item .val.timer{color:var(--accent); font-variant-numeric:tabular-nums;}
+  .result-box{
+    background:rgba(255,255,255,.05); border:1px solid var(--border);
+    border-radius:12px; padding:14px; margin:14px 0; text-align:left; font-size:14px; line-height:1.8;
+  }
+  .result-time{font-size:34px; font-weight:700; color:var(--gold); font-family:Georgia,serif; text-align:center; margin:4px 0 2px;}
+  .result-box label{display:block; font-size:12px; color:var(--muted); margin-top:8px;}
+  .result-box input{
+    width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--border);
+    background:rgba(255,255,255,.08); color:var(--text); font-size:15px; margin-top:3px;
+  }
+  .result-box .row{display:flex; justify-content:space-between; gap:10px; border-bottom:1px dashed var(--border);}
+  .result-box .row b{color:var(--text);}
+  .result-note{font-size:12px; color:var(--gold); margin-top:10px;}
+
   footer{
     text-align:center; color:var(--muted); font-size:11px;
     margin-top:30px; line-height:1.6;
@@ -301,6 +319,10 @@
     <div class="hud-item">
       <div class="lbl">本關目標 Goal</div>
       <div class="val">$<span id="goal">200</span></div>
+    </div>
+    <div class="hud-item">
+      <div class="lbl">⏱ 計時 Time</div>
+      <div class="val timer" id="timerVal">00:00</div>
     </div>
     <div class="hud-item hud-progress">
       <div class="bar"><i id="goalBar"></i></div>
@@ -374,7 +396,7 @@
   <footer>
     遺傳學原理：高豌豆 T 對矮 t 完全顯性 (3:1) · 金魚草 RW 為不完全顯性 (1:2:1) · 第 4 關用卡方檢定揭穿詐騙
     <br>每次育種扣手續費；每株植物的售價依表現型而定；目標達成後進入下一關。
-    <br>⚠️ 天有不測風雲：每次育種有 8% 機率觸發災難（蚜蟲、颱風、火災、病毒、鹿群），庫存會被清空 — 這就是農業！
+    <br>⏱ 計分版：按「開始遊戲」起計時，按「重新開始」或重新整理網頁都不會歸零；為求公平，本版已關閉隨機災難。
   </footer>
 </div>
 
@@ -482,7 +504,8 @@ const DISASTERS = [
   { emoji:'☠️', title:'花葉病毒爆發！', desc:'一種未知病毒席捲全場，所有植株必須立即銷毀以免擴散。', wipeHarvest:false },
   { emoji:'🦌', title:'鹿群闖入！',    desc:'一群飢餓的鹿跳過圍籬，把你的植物全部啃光了。', wipeHarvest:false }
 ];
-const DISASTER_CHANCE = 0.08; // 每次育種 8% 機率觸發
+// 計分版：設為 0 關閉災難（原版為 0.08，即每次育種 8% 機率觸發）
+const DISASTER_CHANCE = 0;
 
 /* ============== Game state ============== */
 let game = {
@@ -873,6 +896,7 @@ function checkGoal(){
 function showLevelComplete(){
   const lv = LEVELS[game.level - 1];
   const isLast = game.level === LEVELS.length;
+  if (isLast){ finishTimer(game.cash); return showFinalResult(); }
   $("#modalCard").innerHTML = `
     <div class="big-emoji">${isLast ? '🏆' : '🎉'}</div>
     <h2>${isLast ? '通關！種苗店帝國達成' : `第 ${lv.id} 關完成！`}</h2>
@@ -901,7 +925,11 @@ function restart(){
 }
 
 $("#btnRestart").addEventListener('click', () => {
-  if (confirm('確定要重新開始？目前進度會清空。')){
+  if (timerState().finished){
+    return toast('已通關，成績已鎖定。請截圖結算畫面交給老師。', 'bad');
+  }
+  if (confirm('確定要重新開始？目前進度會清空。\n⏱ 注意：計時不會歸零，會繼續累計。')){
+    const s = timerState(); s.restarts = (s.restarts||0) + 1; saveTimer(s);
     restart();
   }
 });
@@ -1102,8 +1130,127 @@ function showInfoModal(title, msg, btn){
   $("#modalBg").style.display = 'flex';
 }
 
+/* ============== Timer & scoring (計分用) ============== */
+const TIMER_KEY = 'mendel_timer_v1';
+let memTimer = {};
+function timerState(){
+  try {
+    const raw = localStorage.getItem(TIMER_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch(e){ return memTimer; }
+}
+function saveTimer(s){
+  memTimer = s;
+  try { localStorage.setItem(TIMER_KEY, JSON.stringify(s)); } catch(e){}
+}
+function fmtDur(ms){
+  const t = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(t/3600), m = Math.floor((t%3600)/60), sec = t%60;
+  const p = n => String(n).padStart(2,'0');
+  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+}
+function fmtClock(ts){
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function escHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function tickTimer(){
+  const s = timerState();
+  let ms = 0;
+  if (s.start) ms = (s.end || Date.now()) - s.start;
+  $("#timerVal").textContent = fmtDur(ms);
+}
+setInterval(tickTimer, 500);
+
+function showStartModal(){
+  $("#modalCard").innerHTML = `
+    <div class="big-emoji">⏱️</div>
+    <h2>孟德爾種苗店 · 計時挑戰</h2>
+    <p>完成全部 <b>4 關</b>即通關，成績依<b>完成時間</b>計算。</p>
+    <div class="fraud-info" style="text-align:left;">
+      • 按下「開始遊戲」立即開始計時<br>
+      • 「重新開始」或重新整理網頁<b>不會</b>讓計時歸零<br>
+      • 通關後填寫學號、姓名，<b>截圖結算畫面</b>交給老師
+    </div>
+    <button class="btn big" onclick="startTimer()">▶ 開始遊戲</button>
+  `;
+  $("#modalBg").style.display = 'flex';
+}
+function startTimer(){
+  saveTimer({ start: Date.now(), restarts: 0 });
+  closeModal();
+  tickTimer();
+  toast('⏱ 計時開始！', 'good');
+}
+function finishTimer(cash){
+  const s = timerState();
+  if (s.finished) return;
+  s.end = Date.now();
+  s.finished = true;
+  s.finalCash = cash;
+  saveTimer(s);
+  tickTimer();
+}
+function showFinalResult(){
+  const s = timerState();
+  const dur = fmtDur((s.end||Date.now()) - s.start);
+  const summary = `
+    <div class="result-time">${dur}</div>
+    <div style="text-align:center; font-size:12px; color:var(--muted);">完成時間 Total Time</div>`;
+  if (!s.sid){
+    $("#modalCard").innerHTML = `
+      <div class="big-emoji">🏆</div>
+      <h2>通關！種苗店帝國達成</h2>
+      <p>你掌握了：完全顯性 (3:1)、測交策略、不完全顯性 (1:2:1)、卡方檢定識別詐騙。</p>
+      <div class="result-box">
+        ${summary}
+        <label>學號 Student ID</label>
+        <input id="inSid" autocomplete="off" maxlength="20">
+        <label>姓名 Name</label>
+        <input id="inName" autocomplete="off" maxlength="20">
+      </div>
+      <button class="btn big" onclick="submitResult()">✅ 確認送出</button>
+      <div class="result-note">送出後資料無法修改，請確認無誤</div>
+    `;
+  } else {
+    $("#modalCard").innerHTML = `
+      <div class="big-emoji">🏆</div>
+      <h2>通關成績單</h2>
+      <div class="result-box">
+        ${summary}
+        <div class="row"><span>學號</span><b>${escHtml(s.sid)}</b></div>
+        <div class="row"><span>姓名</span><b>${escHtml(s.name)}</b></div>
+        <div class="row"><span>開始時刻</span><b>${fmtClock(s.start)}</b></div>
+        <div class="row"><span>完成時刻</span><b>${fmtClock(s.end)}</b></div>
+        <div class="row"><span>重新開始次數</span><b>${s.restarts||0}</b></div>
+        <div class="row"><span>最終現金</span><b>$${s.finalCash}</b></div>
+      </div>
+      <div class="result-note">📸 請截圖此畫面交給老師</div>
+    `;
+  }
+  $("#modalBg").style.display = 'flex';
+}
+function submitResult(){
+  const sid = $("#inSid").value.trim();
+  const name = $("#inName").value.trim();
+  if (!sid || !name) return toast('請填寫學號和姓名', 'bad');
+  if (!confirm(`確認送出？\n學號：${sid}\n姓名：${name}`)) return;
+  const s = timerState(); s.sid = sid; s.name = name; saveTimer(s);
+  showFinalResult();
+}
+
 /* ============== Init ============== */
 loadLevel(1);
+(function initTimer(){
+  const s = timerState();
+  if (s.finished){ showFinalResult(); }
+  else if (s.start){ toast('⏱ 計時持續中（重新整理不會歸零）', 'bad'); }
+  else { showStartModal(); }
+  tickTimer();
+})();
 </script>
 </body>
 </html>
